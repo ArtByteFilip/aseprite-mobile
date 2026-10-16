@@ -20,9 +20,9 @@ jobs:
       id: skia
       run: echo "tag=$(cat laf/misc/skia-tag.txt | xargs)" >> $GITHUB_OUTPUT
 
-    - name: Cache Skia for iOS
+    - name: Restore Skia for iOS
       id: cache-skia
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: |
           deps/skia/out/iOS-arm64/*.a
@@ -71,6 +71,24 @@ jobs:
           extra_cflags_cc=["-frtti"]'
         ninja -C out/iOS-arm64 skia modules
         ls -la out/iOS-arm64/*.a
+
+    # Save Skia now (even if the Aseprite build fails later)
+    - name: Save Skia for iOS
+      if: steps.cache-skia.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          deps/skia/out/iOS-arm64/*.a
+          deps/skia/include
+          deps/skia/modules
+          deps/skia/src
+          deps/skia/third_party/externals/freetype/include
+          deps/skia/third_party/externals/harfbuzz/src
+          deps/skia/third_party/externals/libpng
+          deps/skia/third_party/externals/libjpeg-turbo
+          deps/skia/third_party/externals/libwebp/src
+          deps/skia/third_party/externals/zlib
+        key: skia-ios-arm64-${{ steps.skia.outputs.tag }}-v1
 
     - name: Build gen tool (host)
       run: |
