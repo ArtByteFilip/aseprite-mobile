@@ -1,0 +1,92 @@
+name: build
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        build_type: [RelWithDebInfo, Debug]
+        backend: [none, skia]
+        exclude:
+          - build_type: RelWithDebInfo
+            backend: none
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: 'recursive'
+    - name: Install Dependencies
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Linux" ]] ; then
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            libc++-dev libc++abi-dev \
+            libpixman-1-dev libfreetype6-dev libharfbuzz-dev zlib1g-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev libfontconfig1-dev
+        fi
+    - name: Install Skia
+      if: ${{ matrix.backend == 'skia' }}
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Windows" ]] ; then
+          this_dir=$(cygpath "${{ github.workspace }}")
+        else
+          this_dir="${{ github.workspace }}"
+        fi
+        if [[ "${{ matrix.build_type }}" == "RelWithDebInfo" ]] ; then
+          skia_build_type=release
+        else
+          skia_build_type=debug
+        fi
+        skia_url=$(source $this_dir/misc/skia-url.sh $skia_build_type | xargs)
+        skia_file=$(basename $skia_url)
+        curl --ssl-revoke-best-effort -L -o "$skia_file" "$skia_url"
+        unzip "$skia_file" -d skia
+    - uses: TheMrMilchmann/setup-msvc-dev@v4
+      if: runner.os == 'Windows'
+      with:
+        arch: x64
+    - uses: aseprite/get-ninja@main
+    - name: Generating Makefiles
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Windows" ]] ; then
+          if [[ "${{ matrix.backend }}" == "skia" ]] ; then
+            cmake . -G Ninja \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+              -DLAF_BACKEND=${{ matrix.backend }} \
+              -DSKIA_DIR=skia
+          else
+            cmake . -G Ninja \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+              -DLAF_BACKEND=${{ matrix.backend }}
+          fi
+        elif [[ "${{ runner.os }}" == "Linux" ]] && \
+             [[ "${{ matrix.backend }}" == "skia" ]] ; then
+          export CC=clang
+          export CXX=clang++
+          cmake . -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DLAF_BACKEND=${{ matrix.backend }} \
+            -DSKIA_DIR=skia
+        else
+          cmake . -G Ninja \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.14 \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DLAF_BACKEND=${{ matrix.backend }} \
+            -DSKIA_DIR=skia
+        fi
+    - name: Compiling
+      shell: bash
+      run: |
+        ninja
+    - name: Running Tests
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Linux" ]] ; then
+          export XVFB=xvfb-run
+        fi
+        $XVFB ctest --output-on-failure --exclude-regex app_main_tests

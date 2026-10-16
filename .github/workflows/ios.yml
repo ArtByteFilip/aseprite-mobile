@@ -1,0 +1,138 @@
+name: iPad (iOS) build
+on:
+  push:
+    branches: [ main, mobile ]
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      SKIA_DIR: ${{ github.workspace }}/deps/skia
+      GEN_DIR: ${{ github.workspace }}/deps/gen
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Skia tag
+      id: skia
+      run: echo "tag=$(cat laf/misc/skia-tag.txt | xargs)" >> $GITHUB_OUTPUT
+
+    - name: Cache Skia for iOS
+      id: cache-skia
+      uses: actions/cache@v4
+      with:
+        path: |
+          deps/skia/out/iOS-arm64/*.a
+          deps/skia/include
+          deps/skia/modules
+          deps/skia/src
+          deps/skia/third_party/externals/freetype/include
+          deps/skia/third_party/externals/harfbuzz/src
+          deps/skia/third_party/externals/libpng
+          deps/skia/third_party/externals/libjpeg-turbo
+          deps/skia/third_party/externals/libwebp/src
+          deps/skia/third_party/externals/zlib
+        key: skia-ios-arm64-${{ steps.skia.outputs.tag }}-v1
+
+    - name: Install ninja
+      run: brew install ninja || true
+
+    - name: Build Skia for iOS
+      if: steps.cache-skia.outputs.cache-hit != 'true'
+      run: |
+        rm -rf deps/skia
+        git clone --depth 1 --branch ${{ steps.skia.outputs.tag }} https://github.com/aseprite/skia.git deps/skia
+        cd deps/skia
+        python3 tools/git-sync-deps || python3 tools/git-sync-deps
+        bin/gn gen out/iOS-arm64 --args='
+          target_os="ios"
+          target_cpu="arm64"
+          ios_min_target="15.0"
+          is_debug=false
+          is_official_build=true
+          skia_use_gl=true
+          skia_use_metal=false
+          skia_use_vulkan=false
+          skia_use_system_expat=false
+          skia_use_system_icu=false
+          skia_use_system_libjpeg_turbo=false
+          skia_use_system_libpng=false
+          skia_use_system_libwebp=false
+          skia_use_system_zlib=false
+          skia_use_freetype=true
+          skia_use_harfbuzz=true
+          skia_use_system_freetype2=false
+          skia_use_system_harfbuzz=false
+          skia_enable_pdf=false
+          skia_use_dng_sdk=false
+          extra_cflags_cc=["-frtti"]'
+        ninja -C out/iOS-arm64 skia modules
+        ls -la out/iOS-arm64/*.a
+
+    - name: Build gen tool (host)
+      run: |
+        cmake -S . -B "$GEN_DIR" -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLAF_BACKEND=none \
+          -DENABLE_UPDATER=OFF -DENABLE_NEWS=OFF -DENABLE_WEBSOCKET=OFF \
+          -DENABLE_CCACHE=OFF -DENABLE_SCRIPTING=OFF \
+          -DLAF_WITH_EXAMPLES=OFF -DLAF_WITH_TESTS=OFF
+        ninja -C "$GEN_DIR" gen
+
+    - name: Configure Aseprite for iPadOS
+      run: |
+        cmake -S . -B build-ios -G Ninja \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_SYSROOT=iphoneos \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLAF_BACKEND=skia \
+          -DSKIA_DIR="$SKIA_DIR" \
+          -DGEN_EXE="$GEN_DIR/bin/gen" \
+          -DENABLE_UPDATER=OFF -DENABLE_NEWS=OFF -DENABLE_WEBSOCKET=OFF \
+          -DENABLE_CCACHE=OFF -DENABLE_TESTS=OFF \
+          -DLAF_WITH_EXAMPLES=OFF -DLAF_WITH_TESTS=OFF \
+          -DFULLSCREEN_PLATFORM=ON
+
+    - name: Build Aseprite for iPadOS
+      run: ninja -C build-ios -k 0 aseprite
+
+    - name: Package .ipa
+      run: |
+        APP=build-ios/bin/Aseprite.app
+        ls -la "$APP"
+        test -f "$APP/Aseprite"
+        test -d "$APP/data"
+        strip -S -x "$APP/Aseprite" || true
+        # Ad-hoc signature (Sideloadly/AltStore re-sign the app with
+        # the user's Apple ID)
+        codesign --force --sign - --timestamp=none "$APP" || true
+        mkdir -p Payload
+        cp -R "$APP" Payload/
+        zip -qry Aseprite-iPad.ipa Payload
+        ls -la Aseprite-iPad.ipa
+
+    # The repository is public, so the app is encrypted (the compiled
+    # Aseprite cannot be redistributed, see EULA.txt). Decrypt it with:
+    #   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in Aseprite-iPad.ipa.enc -out Aseprite-iPad.ipa
+    - name: Encrypt .ipa
+      env:
+        IPA_PASSWORD: ${{ secrets.IPA_PASSWORD }}
+      run: |
+        test -n "$IPA_PASSWORD"
+        OPENSSL=$(brew --prefix openssl@3 2>/dev/null)/bin/openssl
+        test -x "$OPENSSL" || OPENSSL=openssl
+        "$OPENSSL" version
+        "$OPENSSL" enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in Aseprite-iPad.ipa -out Aseprite-iPad.ipa.enc -pass env:IPA_PASSWORD
+        rm -f Aseprite-iPad.ipa
+        ls -la Aseprite-iPad.ipa.enc
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: Aseprite-iPad-encrypted
+        path: Aseprite-iPad.ipa.enc
+        retention-days: 30

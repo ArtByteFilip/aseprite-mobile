@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Aseprite</string>
+    <string name="storage_title">Access to your files</string>
+    <string name="storage_message">Aseprite needs access to all files to open and save your sprites in the device storage (e.g. Pictures, Download, Documents folders).\n\nWithout this permission you can still save your work in the Aseprite app folder.</string>
+    <string name="storage_allow">Allow</string>
+    <string name="storage_deny">Not now</string>
+</resources>
