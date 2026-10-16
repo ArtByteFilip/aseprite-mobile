@@ -45,6 +45,10 @@ std::string getFullOSString()
   if (p.wineVer)
     os << "; Wine " << p.wineVer;
 
+#elif LAF_IOS
+
+  os << "iPadOS";
+
 #elif LAF_MACOS
 
   os << "macOS " << p.osVer.major() << "." << p.osVer.minor() << "." << p.osVer.patch();
